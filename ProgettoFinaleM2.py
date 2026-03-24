@@ -97,21 +97,155 @@ if __name__ == "__main__":
     synthesize_transactions(p, c, r)
     print("Dataset generato in ./data_local")
 
-#ESERCIZIO 1: Ingestion e Limiti di Memoria (Pandas vs Dask) Obiettivo: Leggere file multipli tendendo in conto l’ottimizzazione della RAM
-
+#ESERCIZIO 1: Ingestion e Limiti di Memoria (Pandas vs Dask)
+#Obiettivo: Leggere file multipli tendendo in conto l’ottimizzazione della RAM
 #1. Il blocco di Pandas: Prova a leggere tutti i file contenuti nella cartella dataset/transazioni_json/ usando Pandas. Noterai che è lento o complesso unire tanti file.
-
-#o Task: Scrivi uno script che legge i file JSON uno alla volta (ciclo for), calcola la somma della colonna amount per ogni file e stampa il totale generale alla fine.
-
+#o Task: Scrivi uno script che legge i file JSON uno alla volta (ciclo for), calcola lasomma della colonna amount per ogni file e stampa il totale generale alla fine.
 #2. La soluzione Dask: Utilizza la libreria dask.dataframe.
-
 #o Task: Leggi tutti i file JSON in un colpo solo usando il carattere jolly (*.json).
-
 #o Task: Raggruppa le vendite per payment_type e calcola la media degli importi.
-
 #Esegui il calcolo con .compute() e stampa il risultato.
 
+import pandas as pd
+import glob
+import os
+#1. Il blocco di Pandas
+path_json = "./data_local/json/*.jsonl"
+files = glob.glob(path_json)
 
+totale_generale = 0.0
 
+print(f"Inizio elaborazione di {len(files)} file con Pandas...")
 
+for f in files:
+    df_temp = pd.read_json(f, lines=True)
+    somma_batch = df_temp['amount'].sum()
+    totale_generale += somma_batch
+    
+    print(f"File {os.path.basename(f)} elaborato. Somma parziale: {somma_batch:.2f}")
 
+print("-" * 30)
+print(f"TOTALE GENERALE VENDITE: {totale_generale:.2f}")
+
+#2. La soluzione Dask
+import dask.dataframe as dd
+
+ddf = dd.read_json("./data_local/json/*.jsonl")
+
+print("Dati caricati virtualmente con Dask.")
+
+colonna_group = 'region_id' 
+
+print(f"Calcolo della media importi raggruppati per {colonna_group}...")
+
+media_per_gruppo = ddf.groupby(colonna_group)['amount'].mean()
+risultato = media_per_gruppo.compute()
+
+print("\nRisultato finale (Dask):")
+print(risultato)
+
+#ESERCIZIO 2: Pipeline ETL con PySpark
+#Obiettivo: Unire fonti dati diverse (Data Warehousing).
+#1. Inizializza una SparkSession.
+#2. Extract: Carica le tre tabelle principali dalla cartella parquet/: Transazioni (transactions_batch_*.parquet),Prodotti (products.parquet),Regioni (regions.parquet)
+#3. Transform:
+#• Unisci (JOIN) le Transazioni con i Prodotti (su product_id) per avere la categoria.
+#• Unisci(JOIN) con le Regioni(su region_id) per avere il nome della regione(region_name).
+#• Crea un DataFrame finale pulito con: transaction_id, region_name, category, amount,year.
+
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+spark = SparkSession.builder.appName("MegaShop_ETL_Pipeline").getOrCreate()
+
+df_trans = spark.read.parquet("./data_local/parquet/transactions_batch_*.parquet")
+df_prod = spark.read.parquet("./data_local/parquet/products.parquet")
+df_reg = spark.read.parquet("./data_local/parquet/regions.parquet")
+
+# Uniamo le transazioni ai prodotti per ottenere la 'category'
+df_enriched = df_trans.join(df_prod, "product_id", "inner")
+
+# Uniamo alle regioni per ottenere il 'region_name'
+df_enriched = df_enriched.join(df_reg, "region_id", "inner")
+
+# Selezione delle colonne richieste dalla traccia
+df_final = df_enriched.select(
+    "transaction_id",
+    "region_name",
+    "category",
+    "amount",
+    "year"
+)
+
+df_final.write.mode("overwrite").partitionBy("year").parquet("./data_local/processed_sales")
+
+print("Pipeline ETL completata. Dati salvati in ./data_local/processed_sales")
+
+#ESERCIZIO 3: Data Visualization (Reporting)
+#Obiettivo: Creare insight visivi per il management.
+#1. Partendo dal DataFrame Spark pulito (creato nell'Esercizio 2):
+#o Calcola il Fatturato Totale per Categoria (category).
+#o Esegui l'azione .toPandas() per portare questo risultato aggregato (che sarà piccolo, poche righe) in memoria locale.
+#2. Utilizza Seaborn o Matplotlib per generare un Grafico a Barre (Bar Chart) che mostri il fatturato per ogni categoria.
+#3. Salva il grafico come immagine fatturato_per_categoria.png o mostralo a video.
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# 1. Aggregazione: Calcolo Fatturato Totale per Categoria
+df_category_revenue = df_final.groupBy("category").sum("amount").withColumnRenamed("sum(amount)", "total_revenue")
+
+# Conversione in Pandas (operazione sicura perché il risultato è piccolo)
+pd_report = df_category_revenue.toPandas()
+
+# 2. Visualizzazione con Seaborn
+plt.figure(figsize=(12, 6))
+sns.set_theme(style="whitegrid")
+
+plot = sns.barplot(data=pd_report, x="category", y="total_revenue", palette="magma")
+
+plt.title("Fatturato Totale per Categoria di Prodotto", fontsize=15)
+plt.xlabel("Categoria", fontsize=12)
+plt.ylabel("Fatturato (€)", fontsize=12)
+
+# 3. Salvataggio e visualizzazione
+plt.savefig("fatturato_per_categoria.png")
+plt.show()
+
+print("Grafico salvato come 'fatturato_per_categoria.png'")
+
+#ESERCIZIO 4 (Bonus): Real-Time Streaming
+#Obiettivo: Monitoraggio live.
+#1. Crea uno script che ascolta la cartella data_local/json/.
+#2. Ogni volta che viene aggiunto un file, lo script deve calcolare in tempo reale il numero totale di transazioni per ogni regione.
+#3. Stampa l'aggiornamento a video (Console Sink). 
+
+#P.S.Fatto interamente con supporto AI, riscontrate diverse difficoltà, inserito solo per capire se potesse essere corretto.
+
+from pyspark.sql.types import StructType, StructField, StringType, DoubleType, IntegerType
+
+schema_json = StructType([
+    StructField("transaction_id", StringType(), True),
+    StructField("customer_id", IntegerType(), True),
+    StructField("product_id", IntegerType(), True),
+    StructField("region_id", IntegerType(), True),
+    StructField("quantity", IntegerType(), True),
+    StructField("amount", DoubleType(), True),
+    StructField("ts", StringType(), True),
+    StructField("year", IntegerType(), True),
+    StructField("month", IntegerType(), True)
+])
+streaming_df = spark.readStream \
+    .schema(schema_json) \
+    .option("maxFilesPerTrigger", 1) \
+    .json("./data_local/json/")
+
+counts_stream = streaming_df.groupBy("region_id").count()
+
+query = counts_stream.writeStream \
+    .outputMode("complete") \
+    .format("console") \
+    .trigger(processingTime='5 seconds') \
+    .start()
+
+print("Streaming avviato. In attesa di nuovi file nella cartella ./data_local/json/...")
